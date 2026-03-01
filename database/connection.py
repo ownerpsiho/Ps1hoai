@@ -12,10 +12,17 @@ from config.settings import settings
 from .models import Base, SystemPrompt
 
 
+def _fix_db_url(url: str) -> str:
+    """Railway даёт postgres:// или postgresql:// — нам нужен postgresql+asyncpg://"""
+    url = url.replace("postgres://", "postgresql+asyncpg://")
+    url = url.replace("postgresql://", "postgresql+asyncpg://")
+    return url
+
+
 # ── Engine ────────────────────────────────────────────────────────────────────
 
 engine = create_async_engine(
-    settings.database_url,
+    _fix_db_url(settings.database_url),
     echo=False,
     pool_size=10,
     max_overflow=20,
@@ -198,7 +205,6 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    # Заполняем системные промпты если их нет
     async with get_session() as session:
         from sqlalchemy import select
         result = await session.execute(select(SystemPrompt).limit(1))
