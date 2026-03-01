@@ -4,10 +4,12 @@
 ║                                                                      ║
 ║  Переменные окружения:                                               ║
 ║    BOT_TOKEN       — токен от @BotFather                            ║
-║    GEMINI_KEY      — ключ Google AI Studio                          ║
+║    GEMINI_KEY      — Google AI Studio API key                       ║
+║    GROQ_KEY        — Groq API key (groq.com) — приоритет над Gemini ║
+║    GROQ_MODEL      — модель Groq (по умолчанию llama-3.3-70b)      ║
 ║    DATABASE_URL    — postgresql://user:pass@host/db                 ║
 ║    ADMIN_IDS       — ID админов через запятую: 123,456              ║
-║    IMAGEGEN_KEY    — ключ для генерации изображений (Together AI)   ║
+║    IMAGEGEN_KEY    — ключ Together AI (для генерации картинок)      ║
 ║    OWNER_USERNAME  — username владельца бота                        ║
 ║    CHANNEL_LINK    — ссылка на канал                                ║
 ╚══════════════════════════════════════════════════════════════════════╝
@@ -34,6 +36,10 @@ class Settings:
         "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/gemini_bot"
     ))
 
+    # ── Groq AI (приоритет над Gemini) ────────────────────────
+    groq_key: str = field(default_factory=lambda: os.getenv("GROQ_KEY", ""))
+    groq_model: str = field(default_factory=lambda: os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
+
     # ── Gemini AI ─────────────────────────────────────────────
     gemini_key: str = field(default_factory=lambda: os.getenv("GEMINI_KEY", ""))
     gemini_model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL", "gemini-2.0-flash"))
@@ -50,7 +56,7 @@ class Settings:
     imagegen_height: int = 1024
 
     # ── Голосовые сообщения ───────────────────────────────────
-    tts_voice: str = "ru-RU-Standard-A"     # Google TTS голос
+    tts_voice: str = "ru-RU-Standard-A"
     stt_language: str = "ru-RU"
 
     # ── Диалог ────────────────────────────────────────────────
@@ -58,20 +64,19 @@ class Settings:
     typing_interval: float = 3.0
 
     # ── Rate limiting ─────────────────────────────────────────
-    rate_limit_messages: int = 5            # сообщений
-    rate_limit_period: int = 10             # за N секунд
+    rate_limit_messages: int = 5
+    rate_limit_period: int = 10
 
     # ── Реферальная система ───────────────────────────────────
-    referral_bonus_messages: int = 5        # бонусных сообщений за реферала
-    referral_bonus_days: int = 0            # бонусных дней
+    referral_bonus_messages: int = 5
+    referral_bonus_days: int = 0
 
     def validate(self) -> list[str]:
-        """Проверяет наличие обязательных переменных"""
         errors = []
         if not self.bot_token:
             errors.append("❌ BOT_TOKEN не задан")
-        if not self.gemini_key:
-            errors.append("❌ GEMINI_KEY не задан")
+        if not self.groq_key and not self.gemini_key:
+            errors.append("❌ Нужен хотя бы один ключ: GROQ_KEY или GEMINI_KEY")
         if not self.database_url:
             errors.append("❌ DATABASE_URL не задан")
         return errors
@@ -84,15 +89,15 @@ PLANS: dict[str, dict] = {
         "name":          "🆓 Бесплатный",
         "emoji":         "🆓",
         "daily_limit":   10,
-        "image_limit":   2,           # генерация картинок в день
-        "voice_limit":   5,           # голосовых в день
+        "image_limit":   2,
+        "voice_limit":   5,
         "price":         0,
         "price_rub":     0,
         "history":       10,
         "desc":          "10 сообщений · 2 картинки · 5 голосовых в день",
         "color":         "gray",
         "features": [
-            "✅ Gemini Flash",
+            "✅ AI чат",
             "✅ 10 сообщений/день",
             "✅ 2 картинки/день",
             "✅ 5 голосовых/день",
@@ -112,7 +117,7 @@ PLANS: dict[str, dict] = {
         "desc":          "50 сообщений · 10 картинок · 20 голосовых в день · 3$/мес",
         "color":         "blue",
         "features": [
-            "✅ Gemini Flash",
+            "✅ AI чат",
             "✅ 50 сообщений/день",
             "✅ 10 картинок/день",
             "✅ 20 голосовых/день",
@@ -132,7 +137,7 @@ PLANS: dict[str, dict] = {
         "desc":          "200 сообщений · 30 картинок · 50 голосовых · 8$/мес",
         "color":         "orange",
         "features": [
-            "✅ Gemini Pro",
+            "✅ AI чат",
             "✅ 200 сообщений/день",
             "✅ 30 картинок/день",
             "✅ 50 голосовых/день",
@@ -152,7 +157,7 @@ PLANS: dict[str, dict] = {
         "desc":          "∞ всё безлимитное · 15$/мес",
         "color":         "gold",
         "features": [
-            "✅ Gemini Pro",
+            "✅ AI чат",
             "✅ ∞ сообщений/день",
             "✅ ∞ картинок/день",
             "✅ ∞ голосовых/день",
