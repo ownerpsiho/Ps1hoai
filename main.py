@@ -51,7 +51,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Отключаем лишние логи
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 logging.getLogger("aiogram").setLevel(logging.WARNING)
 
@@ -59,34 +58,28 @@ logging.getLogger("aiogram").setLevel(logging.WARNING)
 # ── Startup / Shutdown ────────────────────────────────────────────────────────
 
 async def on_startup(bot: Bot) -> None:
-    """Выполняется при старте бота"""
     logger.info("🚀 Запуск бота...")
 
-    # Проверяем конфиг
     errors = settings.validate()
     if errors:
         for err in errors:
             logger.error(err)
         sys.exit(1)
 
-    # Проверяем БД
     logger.info("🗄️ Проверяем подключение к PostgreSQL...")
     if not await check_db():
         logger.error("❌ Не удалось подключиться к базе данных!")
-        logger.error(f"DATABASE_URL: {settings.database_url[:50]}...")
         sys.exit(1)
 
-    # Инициализируем таблицы и дефолтные данные
-    logger.info("📦 Инициализируем базу данных...")
+    logger.info("📦 Инициализируем базу данных (создаём таблицы)...")
     await init_db()
+    logger.info("✅ Таблицы созданы!")
 
-    # Информация о боте
     me = await bot.get_me()
     logger.info(f"✅ Бот @{me.username} ({me.id}) запущен!")
     logger.info(f"🧠 Модель Gemini: {settings.gemini_model}")
     logger.info(f"👑 Админов: {len(settings.admin_ids)}")
 
-    # Уведомляем админов о запуске
     for admin_id in settings.admin_ids:
         try:
             await bot.send_message(
@@ -102,16 +95,12 @@ async def on_startup(bot: Bot) -> None:
 
 
 async def on_shutdown(bot: Bot) -> None:
-    """Выполняется при остановке бота"""
     logger.info("⏹ Остановка бота...")
-
-    # Уведомляем админов
     for admin_id in settings.admin_ids:
         try:
             await bot.send_message(admin_id, "⏹ <b>Бот остановлен</b>", parse_mode="HTML")
         except Exception:
             pass
-
     await close_db()
     logger.info("👋 Бот остановлен")
 
@@ -126,13 +115,17 @@ async def main() -> None:
 
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Регистрируем lifecycle hooks
-    dp.startup.register(lambda: on_startup(bot))
-    dp.shutdown.register(lambda: on_shutdown(bot))
+    # Lifecycle hooks — передаём bot напрямую
+    async def _startup():
+        await on_startup(bot)
+
+    async def _shutdown():
+        await on_shutdown(bot)
+
+    dp.startup.register(_startup)
+    dp.shutdown.register(_shutdown)
 
     # ── Middleware ──────────────────────────────────────────────────────────
-    # Порядок важен: сначала логирование, потом загрузка юзера, потом бан, потом rate limit
-
     dp.message.middleware(LoggingMiddleware())
     dp.callback_query.middleware(LoggingMiddleware())
 
