@@ -34,6 +34,9 @@ def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="🛍 Магазин",         url=settings.main_bot_link),
             InlineKeyboardButton(text="📢 Канал",           url=settings.channel_link),
+        ],  
+        [
+            InlineKeyboardButton(text="💝 Поддержать автора", url="https://www.donationalerts.com/r/psiho_ai"),
         ],
     ]
     if is_admin:
