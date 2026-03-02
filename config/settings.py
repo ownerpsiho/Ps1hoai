@@ -30,7 +30,7 @@ class Settings:
     owner_username: str = field(default_factory=lambda: os.getenv("OWNER_USERNAME", "@admin"))
     channel_link: str = field(default_factory=lambda: os.getenv("CHANNEL_LINK", "https://t.me/example"))
     main_bot_link: str = field(default_factory=lambda: os.getenv("MAIN_BOT_LINK", "https://t.me/example_bot"))
-
+    hf_token: str = field(default_factory=lambda: os.getenv("HF_TOKEN", ""))
     # ── База данных ───────────────────────────────────────────
     database_url: str = field(default_factory=lambda: os.getenv(
         "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost/gemini_bot"
