@@ -24,36 +24,21 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 
-def admin_only(func):
-    """Декоратор — только для админов"""
-    async def wrapper(event, user=None, **kwargs):
-        uid = getattr(event, 'from_user', None)
-        uid = uid.id if uid else (user.id if user else None)
-        if uid not in settings.admin_ids:
-            if isinstance(event, CallbackQuery):
-                await event.answer("⛔ Нет доступа", show_alert=True)
-            elif isinstance(event, Message):
-                await event.answer("⛔ Нет доступа")
-            return
-        return await func(event, user=user, **kwargs)
-    wrapper.__name__ = func.__name__
-    return wrapper
-
-
 # ── Состояния ─────────────────────────────────────────────────────────────────
 
 class AdminStates(StatesGroup):
-    broadcast_text    = State()
-    broadcast_plan    = State()
-    give_sub_uid      = State()
-    give_sub_plan     = State()
-    give_sub_days     = State()
-    find_user         = State()
-    ban_user_id       = State()
-    ban_user_reason   = State()
-    unban_user_id     = State()
-    edit_prompt_key   = State()
-    edit_prompt_text  = State()
+    broadcast_text      = State()
+    broadcast_plan      = State()
+    give_sub_uid        = State()
+    give_sub_plan       = State()
+    give_sub_days       = State()
+    find_user           = State()
+    ban_user_id         = State()
+    ban_user_reason     = State()
+    unban_user_id       = State()
+    edit_prompt_key     = State()
+    edit_prompt_text    = State()
+    users_page          = State()
 
 
 # ── /admin ─────────────────────────────────────────────────────────────────────
@@ -152,6 +137,173 @@ async def adm_stats(callback: CallbackQuery, user):
     )
 
 
+# ── Список пользователей ──────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm_users")
+async def adm_users(callback: CallbackQuery, user):
+    if user.id not in settings.admin_ids:
+        await callback.answer("⛔"); return
+    await callback.answer()
+    await _show_users_page(callback, page=0)
+
+
+@router.callback_query(F.data.startswith("adm_users_page:"))
+async def adm_users_page(callback: CallbackQuery, user):
+    if user.id not in settings.admin_ids:
+        await callback.answer("⛔"); return
+    await callback.answer()
+    page = int(callback.data.split(":")[1])
+    await _show_users_page(callback, page=page)
+
+
+async def _show_users_page(callback: CallbackQuery, page: int = 0):
+    """Показывает список пользователей постранично"""
+    from sqlalchemy import select, desc
+    from database.models import User as UserModel
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    page_size = 10
+
+    async with get_session() as session:
+        # Получаем пользователей
+        result = await session.execute(
+            select(UserModel)
+            .order_by(desc(UserModel.created_at))
+            .offset(page * page_size)
+            .limit(page_size)
+        )
+        users = result.scalars().all()
+
+        # Считаем общее количество
+        from sqlalchemy import func
+        total = await session.scalar(select(func.count(UserModel.id)))
+
+    if not users:
+        await callback.message.edit_text(
+            "👥 Пользователей нет.",
+            reply_markup=admin_keyboard()
+        )
+        return
+
+    lines = [f"👥 <b>Пользователи</b> (стр. {page + 1}, всего {total}):\n"]
+    for u in users:
+        plan = PLANS[u.plan.value]
+        name = escape_html(u.display_name)
+        username = f"@{u.username}" if u.username else "—"
+        ban = " 🚫" if u.is_banned else ""
+        lines.append(
+            f"• <code>{u.id}</code> {name} ({username}){ban}\n"
+            f"  {plan['emoji']} {plan['name']} · {u.total_messages} сообщ."
+        )
+
+    # Кнопки навигации
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"adm_users_page:{page-1}"))
+    if (page + 1) * page_size < total:
+        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"adm_users_page:{page+1}"))
+
+    rows = []
+    if nav_buttons:
+        rows.append(nav_buttons)
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_admin")])
+
+    await callback.message.edit_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+# ── Системный промпт ──────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "adm_edit_prompt")
+async def adm_edit_prompt_start(callback: CallbackQuery, user, state: FSMContext):
+    if user.id not in settings.admin_ids:
+        await callback.answer("⛔"); return
+    await callback.answer()
+
+    from database import PromptRepo
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    async with get_session() as session:
+        prompts = await PromptRepo.get_all(session)
+
+    rows = []
+    for p in prompts:
+        rows.append([InlineKeyboardButton(
+            text=f"{p.emoji} {p.name}",
+            callback_data=f"adm_prompt_select:{p.key}"
+        )])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_admin")])
+
+    await callback.message.edit_text(
+        "📝 <b>Системные промпты</b>\n\nВыбери промпт для редактирования:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+
+
+@router.callback_query(F.data.startswith("adm_prompt_select:"))
+async def adm_prompt_select(callback: CallbackQuery, user, state: FSMContext):
+    if user.id not in settings.admin_ids:
+        await callback.answer("⛔"); return
+
+    key = callback.data.split(":")[1]
+
+    from database import PromptRepo
+    async with get_session() as session:
+        prompt = await PromptRepo.get_by_key(session, key)
+
+    if not prompt:
+        await callback.answer("❌ Промпт не найден"); return
+
+    await state.set_state(AdminStates.edit_prompt_text)
+    await state.update_data(edit_prompt_key=key)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"📝 <b>Редактирование промпта: {prompt.emoji} {prompt.name}</b>\n\n"
+        f"<b>Текущий промпт:</b>\n"
+        f"<pre>{escape_html(prompt.prompt[:500])}{'...' if len(prompt.prompt) > 500 else ''}</pre>\n\n"
+        f"Напиши новый текст промпта:",
+        parse_mode="HTML",
+        reply_markup=back_button("adm_edit_prompt"),
+    )
+
+
+@router.message(AdminStates.edit_prompt_text)
+async def adm_save_prompt(message: Message, user, state: FSMContext):
+    if user.id not in settings.admin_ids: return
+
+    data = await state.get_data()
+    key = data.get("edit_prompt_key")
+    await state.clear()
+
+    new_prompt = message.text.strip()
+    if len(new_prompt) < 10:
+        await message.answer("❌ Слишком короткий промпт (мин. 10 символов):")
+        return
+
+    from database import PromptRepo
+    from sqlalchemy import update
+    from database.models import SystemPrompt
+
+    async with get_session() as session:
+        await session.execute(
+            update(SystemPrompt)
+            .where(SystemPrompt.key == key)
+            .values(prompt=new_prompt)
+        )
+
+    await message.answer(
+        f"✅ <b>Промпт обновлён!</b>\n\n"
+        f"Ключ: <code>{key}</code>\n"
+        f"Длина: {len(new_prompt)} символов",
+        parse_mode="HTML",
+        reply_markup=admin_keyboard(),
+    )
+
+
 # ── Выдача подписки ──────────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "adm_give_sub")
@@ -161,8 +313,7 @@ async def adm_give_sub_start(callback: CallbackQuery, user, state: FSMContext):
     await state.set_state(AdminStates.give_sub_uid)
     await callback.answer()
     await callback.message.edit_text(
-        "💎 <b>Выдать подписку</b>\n\n"
-        "Введи Telegram ID пользователя:",
+        "💎 <b>Выдать подписку</b>\n\nВведи Telegram ID пользователя:",
         parse_mode="HTML",
         reply_markup=back_button("back_admin"),
     )
@@ -176,16 +327,6 @@ async def adm_give_sub_uid(message: Message, user, state: FSMContext):
     except ValueError:
         await message.answer("❌ Введи числовой ID:")
         return
-
-    async with get_session() as session:
-        target = await UserRepo.get(session, target_id)
-
-    if not target:
-        await message.answer(
-            f"⚠️ Пользователь ID <code>{target_id}</code> не найден в БД.\n"
-            f"Всё равно продолжить?",
-            parse_mode="HTML",
-        )
 
     await state.update_data(give_uid=target_id)
     await state.set_state(AdminStates.give_sub_plan)
@@ -204,7 +345,6 @@ async def adm_give_sub_plan(callback: CallbackQuery, user, state: FSMContext):
     await state.update_data(give_plan=plan_key)
 
     if plan_key == "free":
-        # Сразу применяем
         data = await state.get_data()
         target_id = data.get("give_uid")
         await state.clear()
@@ -246,14 +386,12 @@ async def adm_give_sub_days(callback: CallbackQuery, user, state: FSMContext):
     async with get_session() as session:
         target = await UserRepo.get(session, target_id)
         if not target:
-            # Создаём пользователя если нет
             target, _ = await UserRepo.get_or_create(session, target_id)
         await UserRepo.set_plan(session, target, plan_key, days, admin_id=user.id)
 
     plan = PLANS[plan_key]
     await callback.answer("✅ Подписка выдана!")
 
-    # Уведомляем пользователя
     try:
         await callback.bot.send_message(
             target_id,
@@ -519,7 +657,7 @@ async def adm_broadcast_send(message: Message, user, state: FSMContext):
         except Exception:
             failed += 1
         if (sent + failed) % 20 == 0:
-            await asyncio.sleep(1)  # Anti-flood pause
+            await asyncio.sleep(1)
 
     await status.edit_text(
         f"✅ <b>Рассылка завершена!</b>\n\n"
@@ -537,11 +675,13 @@ async def adm_clear_all(callback: CallbackQuery, user):
     if user.id not in settings.admin_ids:
         await callback.answer("⛔"); return
     await callback.answer()
+
+    from keyboards import confirm_keyboard
     await callback.message.edit_text(
         "⚠️ <b>Очистить все диалоги?</b>\n\n"
         "Это удалит историю всех пользователей из БД.",
         parse_mode="HTML",
-        reply_markup=__import__('keyboards').confirm_keyboard("admin_clear_all", "🗑 Очистить всё", "◀️ Назад"),
+        reply_markup=confirm_keyboard("admin_clear_all", "🗑 Очистить всё", "◀️ Назад"),
     )
 
 
