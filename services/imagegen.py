@@ -1,11 +1,10 @@
 """
-🎨 Сервис генерации изображений — Hugging Face (FLUX)
+🎨 Сервис генерации изображений — Pollinations AI (бесплатно, без ключей)
 """
 
 import asyncio
-import base64
 import logging
-import io
+import urllib.parse
 
 import aiohttp
 
@@ -19,13 +18,14 @@ class ImageGenError(Exception):
 
 
 class ImageGenService:
+    """Генерация изображений через Pollinations AI — бесплатно и без ключей"""
 
-    HF_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+    BASE_URL = "https://image.pollinations.ai/prompt/{prompt}"
 
     QUALITY_SUFFIX = ", highly detailed, professional quality, 8k resolution"
 
     def __init__(self):
-        self.key = getattr(settings, 'hf_token', '') or ''
+        pass  # Ключи не нужны
 
     async def generate(
         self,
@@ -35,44 +35,24 @@ class ImageGenService:
         steps: int = 4,
         style: str = "default",
     ) -> bytes:
-        if not self.key:
-            raise ImageGenError("❌ Ключ для генерации изображений не настроен.")
-
         enhanced_prompt = self._enhance_prompt(prompt, style)
+        encoded = urllib.parse.quote(enhanced_prompt)
 
-        payload = {
-            "inputs": enhanced_prompt,
-            "parameters": {
-                "width": width,
-                "height": height,
-                "num_inference_steps": steps,
-            }
-        }
-
-        headers = {
-            "Authorization": f"Bearer {self.key}",
-            "Content-Type": "application/json",
-        }
+        url = (
+            f"https://image.pollinations.ai/prompt/{encoded}"
+            f"?width={width}&height={height}&nologo=true&enhance=true"
+        )
 
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.post(
-                    self.HF_URL,
-                    json=payload,
-                    headers=headers,
+                async with session.get(
+                    url,
                     timeout=aiohttp.ClientTimeout(total=120),
                 ) as resp:
                     if resp.status == 200:
                         return await resp.read()
-                    elif resp.status == 401:
-                        raise ImageGenError("❌ Неверный Hugging Face токен.")
-                    elif resp.status == 429:
-                        raise ImageGenError("⏳ Слишком много запросов. Подожди немного.")
-                    elif resp.status == 503:
-                        raise ImageGenError("⏳ Модель загружается. Попробуй через 20 секунд.")
                     else:
-                        err = await resp.text()
-                        logger.error(f"HF error {resp.status}: {err}")
+                        logger.error(f"Pollinations error {resp.status}")
                         raise ImageGenError(f"❌ Ошибка генерации ({resp.status}).")
 
             except asyncio.TimeoutError:
