@@ -1,11 +1,11 @@
 """
-🎨 Сервис генерации изображений — Together AI (FLUX)
+🎨 Сервис генерации изображений — Hugging Face (FLUX)
 """
 
 import asyncio
 import base64
 import logging
-from typing import Optional
+import io
 
 import aiohttp
 
@@ -19,20 +19,13 @@ class ImageGenError(Exception):
 
 
 class ImageGenService:
-    """Генерация изображений через Together AI (FLUX.1)"""
 
-    TOGETHER_URL = "https://api.together.xyz/v1/images/generations"
+    HF_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
 
-    # Подсказки для улучшения промптов
     QUALITY_SUFFIX = ", highly detailed, professional quality, 8k resolution"
-    NEGATIVE_PROMPT = "blurry, low quality, distorted, ugly, bad anatomy, watermark, text, logo"
 
     def __init__(self):
-        self.key = settings.imagegen_key
-        self.model = settings.imagegen_model
-        self.steps = settings.imagegen_steps
-        self.width = settings.imagegen_width
-        self.height = settings.imagegen_height
+        self.key = getattr(settings, 'hf_token', '') or ''
 
     async def generate(
         self,
@@ -42,23 +35,18 @@ class ImageGenService:
         steps: int = 4,
         style: str = "default",
     ) -> bytes:
-        """
-        Генерирует изображение по текстовому описанию.
-        Возвращает байты PNG.
-        """
         if not self.key:
             raise ImageGenError("❌ Ключ для генерации изображений не настроен.")
 
         enhanced_prompt = self._enhance_prompt(prompt, style)
 
         payload = {
-            "model": self.model,
-            "prompt": enhanced_prompt,
-            "width": width,
-            "height": height,
-            "steps": steps,
-            "n": 1,
-            "response_format": "b64_json",
+            "inputs": enhanced_prompt,
+            "parameters": {
+                "width": width,
+                "height": height,
+                "num_inference_steps": steps,
+            }
         }
 
         headers = {
@@ -69,22 +57,22 @@ class ImageGenService:
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(
-                    self.TOGETHER_URL,
+                    self.HF_URL,
                     json=payload,
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=120),
                 ) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        b64_data = data["data"][0]["b64_json"]
-                        return base64.b64decode(b64_data)
+                        return await resp.read()
                     elif resp.status == 401:
-                        raise ImageGenError("❌ Неверный ключ Together AI.")
+                        raise ImageGenError("❌ Неверный Hugging Face токен.")
                     elif resp.status == 429:
                         raise ImageGenError("⏳ Слишком много запросов. Подожди немного.")
+                    elif resp.status == 503:
+                        raise ImageGenError("⏳ Модель загружается. Попробуй через 20 секунд.")
                     else:
                         err = await resp.text()
-                        logger.error(f"ImageGen error {resp.status}: {err}")
+                        logger.error(f"HF error {resp.status}: {err}")
                         raise ImageGenError(f"❌ Ошибка генерации ({resp.status}).")
 
             except asyncio.TimeoutError:
@@ -94,7 +82,6 @@ class ImageGenService:
                 raise ImageGenError("❌ Ошибка соединения с сервером генерации.")
 
     def _enhance_prompt(self, prompt: str, style: str = "default") -> str:
-        """Улучшает промпт для лучшего результата"""
         style_prefixes = {
             "default":     "",
             "realistic":   "photorealistic, ",
@@ -110,22 +97,18 @@ class ImageGenService:
 
     @staticmethod
     def parse_size(size_str: str) -> tuple[int, int]:
-        """Парсит строку размера '1024x1024' -> (1024, 1024)"""
         try:
             parts = size_str.lower().split("x")
             w = int(parts[0].strip())
             h = int(parts[1].strip())
-            # Ограничиваем разумными значениями
-            w = min(max(w, 256), 2048)
-            h = min(max(h, 256), 2048)
-            # Кратность 64
+            w = min(max(w, 256), 1024)
+            h = min(max(h, 256), 1024)
             w = (w // 64) * 64
             h = (h // 64) * 64
             return w, h
         except Exception:
             return 1024, 1024
 
-    # Доступные стили
     STYLES = {
         "default":    "🎨 Обычный",
         "realistic":  "📸 Реалистичный",
@@ -137,7 +120,6 @@ class ImageGenService:
         "sketch":     "✏️ Набросок",
     }
 
-    # Доступные размеры
     SIZES = {
         "square":    ("1024x1024", "⬛ Квадрат 1024×1024"),
         "portrait":  ("832x1216", "📱 Портрет 832×1216"),
@@ -147,49 +129,31 @@ class ImageGenService:
     }
 
 
-# ── TTS Service ───────────────────────────────────────────────────────────────
-
 class TTSService:
-    """Синтез речи через gTTS (бесплатный)"""
 
     async def synthesize(self, text: str, lang: str = "ru") -> bytes:
-        """Синтезирует речь и возвращает MP3 байты"""
         try:
-            # gTTS в отдельном потоке чтобы не блокировать event loop
             loop = asyncio.get_event_loop()
-            audio_bytes = await loop.run_in_executor(
-                None, self._sync_synthesize, text, lang
-            )
-            return audio_bytes
+            return await loop.run_in_executor(None, self._sync_synthesize, text, lang)
         except Exception as e:
             logger.error(f"TTS error: {e}")
             raise ImageGenError(f"❌ Ошибка синтеза речи: {e}")
 
     def _sync_synthesize(self, text: str, lang: str) -> bytes:
-        try:
-            from gtts import gTTS
-            import io
-            tts = gTTS(text=text, lang=lang, slow=False)
-            buf = io.BytesIO()
-            tts.write_to_fp(buf)
-            buf.seek(0)
-            return buf.read()
-        except ImportError:
-            raise ImageGenError("❌ gTTS не установлен. Добавь 'gtts' в requirements.")
+        from gtts import gTTS
+        import io
+        tts = gTTS(text=text, lang=lang, slow=False)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        return buf.read()
 
     async def text_to_voice_message(self, text: str, lang: str = "ru") -> bytes:
-        """Конвертирует текст в голосовое сообщение (OGG для Telegram)"""
         mp3_bytes = await self.synthesize(text, lang)
-
-        # Конвертируем MP3 → OGG через pydub если доступен
         try:
             loop = asyncio.get_event_loop()
-            ogg_bytes = await loop.run_in_executor(
-                None, self._mp3_to_ogg, mp3_bytes
-            )
-            return ogg_bytes
+            return await loop.run_in_executor(None, self._mp3_to_ogg, mp3_bytes)
         except Exception:
-            # Fallback — возвращаем MP3
             return mp3_bytes
 
     def _mp3_to_ogg(self, mp3_bytes: bytes) -> bytes:
@@ -202,10 +166,8 @@ class TTSService:
             buf.seek(0)
             return buf.read()
         except Exception:
-            return mp3_bytes  # Fallback
+            return mp3_bytes
 
-
-# ── Singletons ────────────────────────────────────────────────────────────────
 
 image_service = ImageGenService()
 tts_service = TTSService()
