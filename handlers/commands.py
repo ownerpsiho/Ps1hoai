@@ -4,7 +4,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import Router, Bot, F
 from aiogram.filters import Command, CommandStart
@@ -27,15 +27,21 @@ router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, user, db, is_new_user: bool = False):
-    """Приветствие — новым и возвращающимся"""
     fname = escape_html(user.first_name or "друг")
     plan = PLANS[user.plan.value]
 
     if is_new_user:
-        # Новый пользователь
+        # Выдаём пробный Pro на 3 дня
+        async with get_session() as session:
+            fresh_user = await UserRepo.get(session, user.id)
+            if fresh_user:
+                await UserRepo.set_plan(session, fresh_user, "pro", days=3)
+
         welcome_text = (
-            f"👋 Привет, <b>{fname}</b>! Добро пожаловать!\n\n"
-            f"Я <b>Gemini AI</b> — твой персональный ИИ-ассистент от Google.\n\n"
+            f"👋 Привет, <b>{fname}</b>! Добро пожаловать в Psiho Ai!\n\n"
+            f"🎁 <b>Подарок для новых пользователей:</b>\n"
+            f"Тебе активирован <b>🔥 Pro на 3 дня бесплатно!</b>\n"
+            f"200 сообщений · 30 картинок · 50 голосовых в день\n\n"
             f"🧠 <b>Что я умею:</b>\n"
             f"• 💬 Отвечать на любые вопросы\n"
             f"• 👨‍💻 Писать и объяснять код\n"
@@ -43,12 +49,9 @@ async def cmd_start(message: Message, user, db, is_new_user: bool = False):
             f"• 🎙 Распознавать голосовые сообщения\n"
             f"• 🎨 Генерировать изображения\n"
             f"• 🧠 Помнить контекст диалога\n\n"
-            f"💎 Твой тариф: <b>{plan['name']}</b>\n"
-            f"📊 Лимит: {plan['desc']}\n\n"
             f"<i>Просто напиши мне что-нибудь!</i>"
         )
     else:
-        # Возвращающийся пользователь
         welcome_text = (
             f"👋 С возвращением, <b>{fname}</b>!\n\n"
             f"💎 Тариф: <b>{plan['name']}</b>\n"
@@ -62,7 +65,6 @@ async def cmd_start(message: Message, user, db, is_new_user: bool = False):
         reply_markup=main_menu(is_admin=user.is_admin),
     )
 
-    # Приветствие от бота — реф. программа
     if is_new_user and user.referrer_id:
         await message.answer(
             "🎁 Ты пришёл по реферальной ссылке!\n"
@@ -87,13 +89,11 @@ async def cmd_help(message: Message, user):
         "/image <i>описание</i> — генерация картинки\n"
         "/ref — реферальная программа\n"
         "/help — эта справка\n\n"
-
         "📎 <b>Поддерживаемые типы:</b>\n"
         "• Текст — обычный чат с AI\n"
         "• 🎙 Голосовые — автоматическое распознавание\n"
         "• 🖼 Фото — анализ изображений\n"
         "• 📄 Документы — PDF, TXT, CSV, JSON\n\n"
-
         f"💎 <b>Твой тариф:</b> {plan['name']}\n"
         f"📊 {plan['desc']}\n\n"
     )
@@ -160,7 +160,6 @@ async def cmd_history(message: Message, user):
 async def cmd_stats(message: Message, user):
     plan = PLANS[user.plan.value]
     expires = time_until(user.plan_expires) if user.plan.value != "free" else "бессрочно"
-    ref_link = f"https://t.me/{(await message.bot.get_me()).username}?start=ref_{user.id}"
 
     text = (
         f"📊 <b>Моя статистика</b>\n\n"
@@ -187,9 +186,7 @@ async def cmd_stats(message: Message, user):
 
 @router.message(Command("image"))
 async def cmd_image(message: Message, user):
-    """Быстрая генерация картинки из команды"""
     from handlers.image import process_image_generation
-
     args = message.text.split(maxsplit=1)
     if len(args) < 2 or not args[1].strip():
         await message.answer(
@@ -199,19 +196,16 @@ async def cmd_image(message: Message, user):
             "Примеры:\n"
             "• <code>/image котёнок в космосе</code>\n"
             "• <code>/image realistic горный пейзаж на рассвете</code>\n"
-            "• <code>/image anime девушка с цветами</code>\n\n"
-            "Доступные стили: realistic, anime, oil_paint, watercolor, cyberpunk, pixel, sketch",
+            "• <code>/image anime девушка с цветами</code>",
             parse_mode="HTML",
         )
         return
 
     from utils import parse_image_command
     prompt, style, size = parse_image_command(args[1])
-
     if not prompt:
         await message.answer("❌ Напиши описание картинки после команды.")
         return
-
     await process_image_generation(message, user, prompt, style, size)
 
 
