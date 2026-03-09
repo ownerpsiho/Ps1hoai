@@ -4,9 +4,6 @@
 
 import hashlib
 import hmac
-import json
-import os
-from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -15,8 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from config.settings import settings
-from database.models import User, PlanEnum
+from config.settings import settings, PLANS
+from database.models import User
 
 app = FastAPI(title="Psiho AI API")
 
@@ -39,14 +36,10 @@ AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=F
 
 
 def verify_telegram_auth(data: dict) -> bool:
-    """Проверяет подпись Telegram Login Widget"""
     check_hash = data.pop("hash", None)
     if not check_hash:
         return False
-
-    data_check_string = "\n".join(
-        f"{k}={v}" for k, v in sorted(data.items())
-    )
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
     secret_key = hashlib.sha256(settings.bot_token.encode()).digest()
     computed = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
     return computed == check_hash
@@ -67,9 +60,6 @@ async def get_user(
     username: Optional[str] = Query(None),
     photo_url: Optional[str] = Query(None),
 ):
-    """Возвращает данные пользователя после Telegram авторизации"""
-
-    # Проверяем подпись
     auth_data = {
         "id": str(id),
         "first_name": first_name,
@@ -83,7 +73,6 @@ async def get_user(
     if not verify_telegram_auth(auth_data):
         raise HTTPException(status_code=403, detail="Invalid auth")
 
-    # Получаем пользователя из БД
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(User).where(User.id == id))
         user = result.scalar_one_or_none()
@@ -91,8 +80,11 @@ async def get_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    from config.settings import PLANS
     plan = PLANS[user.plan.value]
+
+    # Безопасно получаем дневные счётчики
+    messages_today = getattr(user, 'daily_messages', 0) or getattr(user, 'messages_today', 0) or 0
+    images_today = getattr(user, 'daily_images', 0) or getattr(user, 'images_today', 0) or 0
 
     return {
         "id": user.id,
@@ -109,8 +101,8 @@ async def get_user(
             "total_messages": user.total_messages,
             "total_images": user.total_images,
             "total_voice": user.total_voice,
-            "messages_today": user.daily_messages,
-            "images_today": user.daily_images,
+            "messages_today": messages_today,
+            "images_today": images_today,
             "referral_count": user.referral_count,
         },
         "limits": {
