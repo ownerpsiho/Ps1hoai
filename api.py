@@ -109,8 +109,8 @@ async def get_user(
             "total_messages": user.total_messages,
             "total_images": user.total_images,
             "total_voice": user.total_voice,
-            "messages_today": user.messages_today,
-            "images_today": user.images_today,
+            "messages_today": user.daily_messages,
+            "images_today": user.daily_images,
             "referral_count": user.referral_count,
         },
         "limits": {
